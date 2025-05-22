@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Authorizing...</title>
+</head>
+<body>
+  <h2>Logging you in...</h2>
+  <script>
+    // Fetch the session-based user info
+    fetch('/api/user', { credentials: 'include' })
+      .then(res => res.json())
+      .then(data => {
+        // Send the user info back to the opener (React frontend)
+        window.opener.postMessage({ type: 'user', payload: data }, 'http://localhost:5173');
+        window.close();
+      })
+      .catch(err => {
+        console.error('Failed to post user info:', err);
+        window.close();
+      });
+  </script>
+</body>
+</html>
