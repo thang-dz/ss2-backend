@@ -5,6 +5,8 @@ from flask_cors import CORS
 import os
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
+import json
+from collections import Counter
 load_dotenv()
 
 import os
@@ -54,6 +56,8 @@ class Song(db.Model):
     desc = db.Column(db.Text, nullable=False)
     duration = db.Column(db.Text, nullable=False)
     album_id = db.Column(db.Integer, db.ForeignKey('album.id'))
+    genre = db.Column(db.String(100), nullable=False, default='Unknown')
+
 
     def __repr__(self):
         return f'<Song {self.name}>'
@@ -84,7 +88,7 @@ with app.app_context():
 oauth = OAuth(app)
 google = oauth.register(
     name='google',
-    client_id='ClIENT_ID',
+    client_id='CLIENT_ID',
     client_secret='CLIENT_SECRET',
     access_token_url='https://accounts.google.com/o/oauth2/token',
     access_token_params=None,
@@ -185,19 +189,34 @@ def upload_album():
 
     return jsonify({"message": "Album uploaded successfully", "album_id": album.id})
 
+
 @app.route('/api/song/<int:song_id>', methods=['GET'])
 def get_song(song_id):
     song = Song.query.get(song_id)
-    if song:
-        return jsonify({
-            "id": song.id,
-            "name": song.name,
-            "image": song.image,
-            "file": song.file,
-            "desc": song.desc,
-            "duration": song.duration
-        })
-    return jsonify({"error": "Song not found"}), 404
+    if not song:
+        return jsonify({"error": "Song not found"}), 404
+    email = session.get('email')
+    if email:
+        user = User.query.filter_by(email=email).first()
+        if user:
+            try:
+                history = json.loads(user.history or "[]")
+                history.append(song_id)
+                history = history[-20:]  
+                user.history = json.dumps(history)
+                db.session.commit()
+            except Exception as e:
+                print(f"Lỗi cập nhật lịch sử nghe: {e}")
+    return jsonify({
+        "id": song.id,
+        "name": song.name,
+        "image": song.image,
+        "file": song.file,
+        "desc": song.desc,
+        "duration": song.duration,
+        "genre": song.genre
+    })
+
 
 @app.route('/api/songs', methods=['GET'])
 def list_songs():
@@ -231,6 +250,7 @@ def upload_song():
     desc = request.form.get('desc')
     duration = request.form.get('duration')
     album_id = request.form.get('album_id')
+    genre=request.form.get('genre')
     image_file = request.files['image']
     audio_file = request.files['file']
 
@@ -246,7 +266,7 @@ def upload_song():
     image_url = f"{request.host_url}uploads/images/{image_filename}"
     audio_url = f"{request.host_url}uploads/audio/{audio_filename}"
 
-    song = Song(name=name, desc=desc, duration=duration, image=image_url, file=audio_url, album_id=album_id)
+    song = Song(name=name, desc=desc, duration=duration, image=image_url, file=audio_url, album_id=album_id,genre=genre)
     db.session.add(song)
     db.session.commit()
 
@@ -263,7 +283,8 @@ def search_song():
             "image": s.image,
             "file": s.file,
             "desc": s.desc,
-            "duration": s.duration
+            "duration": s.duration,
+            "genre":s.genre
         } for s in results
     ])
 
@@ -361,7 +382,7 @@ def add_song_to_playlist(playlist_id):
     if not playlist or not song:
         return jsonify({"error": "Invalid playlist or song ID"}), 404
 
-    # Kiểm tra nếu bài hát đã có trong playlist thì không thêm nữa
+    
     existing = PlaylistSong.query.filter_by(playlist_id=playlist_id, song_id=song_id).first()
     if existing:
         return jsonify({"message": "Song already in playlist"}), 200
@@ -417,6 +438,109 @@ def upload_playlist_image(playlist_id):
     db.session.commit()
 
     return jsonify({"message": "Image uploaded", "image": image_url})
+
+@app.route('/api/user/history', methods=['GET'])
+def get_listening_history():
+    user_email = session.get('email')
+    if not user_email:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    user = User.query.filter_by(email=user_email).first()
+    if not user or not user.history:
+        return jsonify([])  # Trả về mảng rỗng nếu không có lịch sử
+
+    try:
+        song_ids = json.loads(user.history)
+        # Giữ thứ tự từ mới đến cũ
+        ordered_songs = [Song.query.get(sid) for sid in reversed(song_ids) if Song.query.get(sid)]
+        return jsonify([{
+            "id": s.id,
+            "name": s.name,
+            "image": s.image,
+            "file": s.file,
+            "desc": s.desc,
+            "duration": s.duration,
+            "genre": s.genre
+        } for s in ordered_songs])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+def recommend_by_genre_history(user, limit=10):
+    """
+    Gợi ý bài hát dựa trên thể loại được nghe nhiều nhất trong lịch sử người dùng.
+    """
+    if not user or not user.history:
+        return []
+
+    try:
+        song_ids = json.loads(user.history)
+        listened_songs = [Song.query.get(sid) for sid in song_ids if Song.query.get(sid)]
+        genres = [s.genre for s in listened_songs if s.genre]
+
+        if not genres:
+            return []
+
+        top_genre = Counter(genres).most_common(1)[0][0]
+
+        # Gợi ý bài mới cùng genre
+        recommended = Song.query.filter(Song.genre == top_genre).all()
+        already_listened = set(song_ids)
+        filtered = [s for s in recommended if s.id not in already_listened]
+
+        return filtered[:limit]
+    except Exception as e:
+        print(f"[Genre Recommend] Error: {e}")
+        return []
+    
+@app.route('/api/recommend_by_genre', methods=['GET'])
+def api_recommend_by_genre():
+    user_email = session.get('email')
+    if not user_email:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    user = User.query.filter_by(email=user_email).first()
+    songs = recommend_by_genre_history(user, limit=10)
+
+    return jsonify([{
+        "id": s.id,
+        "name": s.name,
+        "image": s.image,
+        "file": s.file,
+        "desc": s.desc,
+        "duration": s.duration,
+        "genre": s.genre
+    } for s in songs if s])
+
+# @app.route('/api/recommend_by_genre', methods=['GET'])
+# def recommend_by_genre():
+#     user_email = session.get('email')
+#     if not user_email:
+#         return jsonify({"error": "Unauthorized"}), 401
+
+#     user = User.query.filter_by(email=user_email).first()
+#     if not user or not user.history:
+#         return jsonify({"error": "No listening history"}), 404
+
+#     try:
+#         song_ids = json.loads(user.history)
+#         recent_songs = Song.query.filter(Song.id.in_(song_ids[-10:])).all()
+#         genres = [s.genre for s in recent_songs if s.genre]
+#         if not genres:
+#             return jsonify({"error": "No valid genres found"}), 404
+#         top_genre = Counter(genres).most_common(1)[0][0]
+#         recommended = Song.query.filter(Song.genre == top_genre).limit(10).all()
+#     except Exception as e:
+#         return jsonify({"error": str(e)}), 500
+
+#     return jsonify([{
+#         "id": s.id,
+#         "name": s.name,
+#         "image": s.image,
+#         "file": s.file,
+#         "desc": s.desc,
+#         "duration": s.duration,
+#         "genre": s.genre
+#     } for s in recommended])
 
 if __name__ == '__main__':
     app.run(debug=True)
