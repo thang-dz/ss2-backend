@@ -94,19 +94,7 @@ with app.app_context():
     # db.drop_all()
     db.create_all()
 
-oauth = OAuth(app)
-google = oauth.register(
-    name='google',
-    client_id=CLIENT_ID,
-    client_secret=CLIENT_SECRET,
-    access_token_url='https://accounts.google.com/o/oauth2/token',
-    access_token_params=None,
-    authorize_url='https://accounts.google.com/o/oauth2/auth',
-    authorize_params=None,
-    api_base_url='https://www.googleapis.com/oauth2/v1/',
-    client_kwargs={'scope' : 'profile email'},
-    server_metadata_url= 'https://accounts.google.com/.well-known/openid-configuration'
-)
+
 
 # Routes
 @app.route('/')
@@ -307,8 +295,6 @@ def search_song():
     duration_filter = request.args.get('duration', '').strip()
 
     results = Song.query
-
-    # Tìm kiếm từ khóa đã loại bỏ khoảng trắng
     if query:
         normalized_name = func.replace(func.lower(Song.name), ' ', '')
         normalized_desc = func.replace(func.lower(Song.desc), ' ', '')
@@ -321,11 +307,9 @@ def search_song():
             (normalized_genre.ilike(f"%{normalized_query}%"))
         )
 
-    # Lọc thể loại
     if genre:
         results = results.filter(func.lower(Song.genre) == genre.lower())
 
-    # Lọc theo thời lượng mm:ss -> giây
     if duration_filter:
         try:
             minutes = cast(func.substr(Song.duration, 1, func.instr(Song.duration, ':') - 1), Integer)
