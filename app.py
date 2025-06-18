@@ -94,7 +94,19 @@ with app.app_context():
     # db.drop_all()
     db.create_all()
 
-
+oauth = OAuth(app)
+google = oauth.register(
+    name='google',
+    client_id='',
+    client_secret='',
+    access_token_url='https://accounts.google.com/o/oauth2/token',
+    access_token_params=None,
+    authorize_url='https://accounts.google.com/o/oauth2/auth',
+    authorize_params=None,
+    api_base_url='https://www.googleapis.com/oauth2/v1/',
+    client_kwargs={'scope' : 'profile email'},
+    server_metadata_url= 'https://accounts.google.com/.well-known/openid-configuration'
+)
 
 # Routes
 @app.route('/')
